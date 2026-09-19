@@ -1,4 +1,13 @@
 # SWIFT Assignment 7 – Choked Hubs Prioritization
+## Dataset
+
+The analysis was performed using the dataset provided as part of the SWIFT Assignment 7 assessment.
+
+**Dataset:** [Download / Access Dataset](https://drive.google.com/file/d/1UPLKnrLrzTMBLR8IEbuAnKwVp0bDX1vA/view?usp=sharing)
+
+The raw dataset is not included in this GitHub repository because it is a large assignment-provided file. It was loaded locally into PostgreSQL for analysis.
+
+---
 
 ## 1. Project Overview
 
