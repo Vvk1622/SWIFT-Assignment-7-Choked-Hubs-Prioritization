@@ -1,0 +1,338 @@
+SWIFT Assignment 7 – Choked Hubs Prioritization
+Executive Summary
+This analysis was conducted to identify courier warehouses that may be experiencing operational congestion and to determine which warehouses should be prioritized for clearing.
+The dataset contains 100,786 shipments with detailed shipment tracking histories. The nested tracking information was transformed into chronological warehouse-level shipment stays. After cleaning and normalizing warehouse locations, 533,725 warehouse-stay records were generated, including both completed and currently open stays.
+A data-driven long-stay threshold of 51.26 hours was established using the 95th percentile of completed warehouse-stay duration. Warehouse performance was then evaluated using both historical completed stays and active shipments as of 7 October 2023.
+A warehouse was classified as "Prioritize for Clearing" when it met either the historical or current choke criteria. The analysis identified 7,328 warehouse/location values, of which:
+
+167 warehouses were classified as Prioritize for Clearing
+
+
+7,161 warehouses were classified as Ignore
+
+
+19 warehouses met both historical and current choke conditions
+
+
+146 warehouses met only the historical condition
+
+
+2 warehouses met only the current condition
+
+A priority score was also calculated for the warehouses requiring attention. The score combines current long-stay volume, current long-stay rate, historical long-stay rate, and historical long-stay volume, with greater weight given to current performance.
+The final output provides an actionable warehouse-level classification and priority ranking that can support operational teams in identifying locations requiring further investigation or clearing action.
+
+
+
+1. Objective
+
+The objective of this analysis is to identify courier warehouses where shipments are staying for an unusually long period and to classify these warehouses into two categories:
+
+Prioritize for Clearing – warehouses requiring operational attention.
+Ignore – warehouses whose observed performance is within the defined expectations.
+
+The analysis uses shipment tracking history to calculate how long shipments remain at each warehouse. Both historical completed warehouse stays and currently open warehouse stays as of 7 October 2023 are considered.
+
+
+## 2. Dataset Understanding
+
+The dataset contains shipment-level information in newline-delimited JSON (NDJSON) format. Each row represents one shipment.
+
+The main fields used in the analysis are:
+
+* **shipment_id** – unique identifier of the shipment.
+* **latest_status** – latest known shipment status.
+* **latest_location** – latest known shipment location.
+* **deduped_track_details** – tracking history containing the time and location of each shipment event.
+* **hub_location_nam** – an additional hub-related field available for some shipments.
+
+The dataset contains **100,786 shipment records**.
+
+The shipment status distribution includes Delivered, In Transit, Out for Delivery, Picked Up and Shipment Delayed shipments. Some shipment records contain blank location values, so missing data was handled during the analysis.
+
+The `deduped_track_details` field was particularly important because it provides the shipment's movement history across different courier locations. Therefore, warehouse performance was analysed using the tracking-event locations rather than relying only on the latest shipment location.
+
+## 3. Data Preparation
+
+The tracking history was stored as an array inside each JSON record. I expanded these arrays into individual tracking events using PostgreSQL JSON functions.
+
+This produced **671,420 tracking events** before removing events with blank warehouse locations.
+
+After removing blank tracking locations, **662,521 usable tracking events** remained.
+
+The tracking events were then:
+
+1. Converted into timestamp values.
+2. Cleaned by removing blank locations.
+3. Normalized using trimming and lowercase conversion so that the same warehouse written with different capitalization could be treated consistently.
+4. Sorted chronologically for each shipment.
+
+The chronological ordering was necessary because the original tracking events were not always stored in time order.
+
+The cleaned tracking events were then used to identify periods during which a shipment remained at the same warehouse.
+
+
+
+## 4. Warehouse Stay Calculation
+
+After sorting the tracking events chronologically for each shipment, consecutive events at the same warehouse were grouped into a single warehouse stay.
+
+For each stay:
+
+* **Entry time** = first tracking timestamp recorded at that warehouse.
+* **Exit time** = entry time of the next warehouse visited by the shipment.
+* **Dwell time** = difference between exit time and entry time.
+
+The mathematical calculation used was:
+
+**Dwell Time (hours) = (Exit Time − Entry Time) / 3600**
+
+If a shipment had not moved to another warehouse by the analysis cut-off date, the stay was treated as an **open stay** rather than a completed stay.
+
+This process generated **533,725 warehouse-stay records**, consisting of:
+
+* **432,950 completed stays**
+* **100,775 open stays**
+
+Completed stays were used to understand historical warehouse performance, while open stays were used to identify current operational issues as of **7 October 2023**.
+
+### Long-Stay Threshold
+
+To identify unusually long warehouse stays, the 95th percentile of completed warehouse-stay duration was calculated.
+
+The resulting threshold was:
+
+**95th percentile = 51.26 hours**
+
+Therefore, a completed warehouse stay was considered a **long stay** when:
+
+**Dwell Time > 51.26 hours**
+
+This threshold is data-driven and represents unusually long warehouse dwell time relative to the observed network behaviour. It is not treated as an external service-level agreement.
+## 5. Definition of a Choked Warehouse
+
+A warehouse is considered **choked** when shipments remain at the warehouse for unusually long periods, either based on its historical completed stays or based on the shipments currently waiting there.
+
+A minimum sample size of **20 stays** was used for warehouse-level benchmarking. This reduces the impact of warehouses with very few observations.
+
+### 5.1 Historical Choke Condition
+
+Historical performance was calculated using completed warehouse stays.
+
+Among warehouses with at least 20 completed stays, the 75th percentile of the historical long-stay rate was **4.59%**.
+
+A warehouse was therefore classified as historically choked when:
+
+**Historical Choke = (Completed Stays ≥ 20) AND (Historical Long-Stay Rate > 4.59%)**
+
+where:
+
+**Historical Long-Stay Rate = Long Stays / Completed Stays × 100**
+
+### 5.2 Current Choke Condition
+
+Current performance was analysed using shipments that were still at their latest warehouse as of **7 October 2023**.
+
+Only shipments with the latest status **"In Transit"** or **"Out for Delivery"** were included as active shipments.
+
+Among warehouses with at least 20 active/open stays:
+
+* 75th percentile of open long stays = **10**
+* 75th percentile of open long-stay rate = **16.80%**
+
+A warehouse was classified as currently choked when all three conditions were satisfied:
+
+**Current Choke = (Open Stays ≥ 20) AND (Open Long Stays > 10) AND (Open Long-Stay Rate > 16.80%)**
+
+where:
+
+**Open Long-Stay Rate = Open Long Stays / Open Stays × 100**
+
+### 5.3 Final Mathematical Definition
+
+The final definition of a Choked Warehouse is:
+
+**Choked Warehouse = Historical Choke OR Current Choke**
+
+Therefore, a warehouse is placed in the **"Prioritize for Clearing"** category if it satisfies either the historical choke condition or the current choke condition.
+
+Warehouses satisfying neither condition are placed in the **"Ignore"** category.
+
+The thresholds were derived from the observed dataset rather than from an externally supplied SLA.
+
+
+
+## 6. Historical Warehouse Analysis
+
+Historical warehouse performance was calculated using completed warehouse stays, where both the entry and exit times were available.
+
+For every warehouse, the following metrics were calculated:
+
+* Total number of completed stays.
+* Number of long stays, where dwell time was greater than 51.26 hours.
+* Historical long-stay rate.
+* Median dwell time.
+* 95th percentile dwell time.
+
+To avoid unreliable results from warehouses with very few observations, only warehouses with at least **20 completed stays** were included when calculating the historical benchmark.
+
+This produced **658 eligible warehouses** for historical benchmarking.
+
+The 75th percentile of the historical long-stay rate among these eligible warehouses was **4.59%**.
+
+Therefore, warehouses with:
+
+**Completed Stays ≥ 20**
+
+and
+
+**Historical Long-Stay Rate > 4.59%**
+
+were treated as historically choked.
+
+Using this rule, **165 warehouses** met the historical choke condition.
+
+This historical analysis captures warehouses that have repeatedly shown unusually high long-stay behaviour over the available tracking history.
+
+
+## 7. Current Warehouse Analysis
+
+In addition to historical performance, I analysed shipments that were still active as of the assignment cut-off date of **7 October 2023**.
+
+The analysis considered only shipments whose latest status was:
+
+* **In Transit**
+* **Out for Delivery**
+
+For each active shipment, the latest open warehouse stay was identified and its open dwell time was calculated up to the cut-off time of **7 October 2023, 23:59:59 IST**.
+
+This resulted in:
+
+* **21,192 active/open shipment stays**
+* **2,598 warehouses** containing active/open stays
+
+To avoid giving excessive importance to warehouses with very few active shipments, only warehouses with at least **20 open stays** were used to calculate the current benchmark.
+
+This produced **147 eligible warehouses**.
+
+The 75th percentile benchmarks among these warehouses were:
+
+* **Open long stays: 10**
+* **Open long-stay rate: 16.80%**
+
+Therefore, a warehouse was classified as currently choked only when all three conditions were satisfied:
+
+**Open Stays ≥ 20**
+
+**Open Long Stays > 10**
+
+**Open Long-Stay Rate > 16.80%**
+
+This approach identifies warehouses where there is both sufficient current shipment volume and evidence of unusually long active stays.
+
+
+
+## 8. Warehouse Classification
+
+The historical and current analyses were combined using an **OR** condition.
+
+A warehouse was classified as **"Prioritize for Clearing"** if it satisfied either:
+
+1. The historical choke condition, or
+2. The current choke condition.
+
+The final classification rule was:
+
+**Choked Warehouse = Historical Choke OR Current Choke**
+
+All warehouses that did not satisfy either condition were classified as **"Ignore"**.
+
+The classification produced the following results:
+
+| Classification              | Number of Warehouses |
+| --------------------------- | -------------------: |
+| Both Historical and Current |                   19 |
+| Current Only                |                    2 |
+| Historical Only             |                  146 |
+| Prioritize for Clearing     |              **167** |
+| Ignore                      |            **7,161** |
+| **Total**                   |            **7,328** |
+
+The 167 warehouses requiring prioritization consist of:
+
+* **19** warehouses identified by both historical and current conditions.
+* **2** warehouses identified only by the current condition.
+* **146** warehouses identified only by the historical condition.
+
+The remaining **7,161 warehouses** did not meet the defined choke criteria and were classified as **"Ignore"**.
+
+
+
+## 9. Priority Score
+
+After identifying the warehouses classified as **"Prioritize for Clearing"**, I created a priority score to help operations order these warehouses for attention.
+
+The score combines four normalized indicators:
+
+1. **Current Long-Stay Volume – 40%**
+2. **Current Long-Stay Rate – 25%**
+3. **Historical Long-Stay Rate – 20%**
+4. **Historical Long-Stay Volume – 15%**
+
+The mathematical formula is:
+
+**Priority Score = (0.40 × Current Volume Score) + (0.25 × Current Rate Score) + (0.20 × Historical Rate Score) + (0.15 × Historical Volume Score)**
+
+The component scores were normalized against the maximum value observed in the dataset and converted to a 0–100 scale.
+
+Current performance receives the highest combined weight because the operational objective is to identify warehouses requiring attention based on the current situation.
+
+The score is used only to establish the order of priority among warehouses already classified as **"Prioritize for Clearing"**. It does not change the underlying choke classification.
+
+The final output contains a priority rank for warehouses requiring clearing and an ignore rank for warehouses classified as "Ignore".
+
+
+
+
+## 10. Results
+
+The analysis identified **7,328 unique warehouse/location values** from the shipment tracking data.
+
+The final classification was:
+
+* **167 warehouses – Prioritize for Clearing**
+* **7,161 warehouses – Ignore**
+
+The 167 prioritized warehouses were identified through the following conditions:
+
+* **146** were identified through historical performance.
+* **2** were identified through current active shipment performance.
+* **19** were identified through both historical and current performance.
+
+The final SQL output contains the warehouse name, historical performance metrics, current open-stay metrics, category, priority score and priority rank.
+
+## 11. Key Observations
+
+The analysis produced several important observations:
+
+1. The shipment tracking data contains a large number of warehouse/location variations. Normalizing the location text was therefore necessary before calculating warehouse-level metrics.
+
+2. The overall 95th percentile of completed warehouse-stay duration was **51.26 hours**. This was used as the data-driven threshold for identifying unusually long stays.
+
+3. Historical warehouse performance and current warehouse performance provide different types of information. Historical analysis identifies recurring performance issues, while current analysis highlights active operational pressure as of the assignment cut-off date.
+
+4. A minimum of 20 observations was used for warehouse-level benchmarking to reduce the influence of very small samples.
+
+5. Only a relatively small subset of the 7,328 identified warehouse/location values met the defined choke conditions. These warehouses were therefore separated from locations whose observed performance did not meet the defined criteria.
+
+## 12. Conclusion
+
+The analysis provides a systematic method for identifying potentially choked courier warehouses using shipment tracking history.
+
+The approach first converts the nested tracking data into chronological warehouse stays, calculates warehouse dwell time, establishes a data-driven long-stay threshold, and then evaluates both historical and current warehouse performance.
+
+Using the defined mathematical criteria, **167 warehouses were classified as "Prioritize for Clearing"**, while **7,161 were classified as "Ignore"**.
+
+The resulting CSV provides the warehouse-level classification and supporting metrics, while the priority score provides an operational ordering of the warehouses requiring attention.
+
+This approach can also be reused on future shipment data by recalculating the benchmarks and applying the same methodology.
